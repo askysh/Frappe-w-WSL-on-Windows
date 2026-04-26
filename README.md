@@ -16,10 +16,12 @@ layers differ enough that they live separately.
   toolchain, MariaDB 10.6, Redis 6, wkhtmltopdf with patched Qt, X11 stub libs)
 - MariaDB hardened (no anonymous users, no test database, no remote root, root
   password set) and configured for `utf8mb4` / `utf8mb4_unicode_ci`
-- A `--validate` mode that runs 25 health checks against the installed system
+- nvm + Node 20 + yarn 1.22 (Classic) + pipx + uv + frappe-bench
+- A `~/frappe-bench/` with Frappe v15 and ERPNext v15 cloned, built, and
+  installed against a default site (`wsldev` by default)
+- Each script has a `--validate` mode that runs health checks (~25 in script
+  01, ~15 in script 02) against the installed system
 - Idempotent re-runs: every step checks state before acting
-- The actual Frappe bench install (script `02-...`) is **not yet shipped** —
-  see Roadmap below
 
 ## Requirements
 
@@ -71,8 +73,52 @@ bash /mnt/c/path/to/Frappe-w-WSL-on-Windows/01-wsl-system-deps.sh
 script prints the recommended answers above the prompt. The root password
 you set is the one you will need later for `bench new-site`.
 
-When script `01` ends with `All checks passed`, the system is ready for the
-Frappe install (script `02`, future).
+When script `01` ends with `All checks passed`, run script `02` to install
+Frappe + ERPNext:
+
+```bash
+bash /mnt/c/path/to/Frappe-w-WSL-on-Windows/02-wsl-frappe-install.sh
+```
+
+Script `02` will prompt twice during `bench new-site`: once for the MariaDB
+root password (the one you set during `mysql_secure_installation` in script
+`01`), and once for a new Administrator password for the site. To skip both
+prompts in non-interactive runs, supply them via env vars:
+
+```bash
+MARIADB_ROOT_PASSWORD='your-db-root-password' \
+ADMIN_PASSWORD='your-site-admin-password' \
+bash 02-wsl-frappe-install.sh
+```
+
+When `02` ends with `All checks passed`, start the dev server:
+
+```bash
+cd ~/frappe-bench
+bench start
+```
+
+Open `http://localhost:8000` in any Windows browser. WSL2 forwards Windows
+localhost into the WSL VM automatically — no `/etc/hosts` edits needed.
+Login as `Administrator` with the password you set during `new-site`.
+
+## Customizing Script 02
+
+```bash
+# default site name (default: wsldev)
+SITE_NAME=mysite bash 02-wsl-frappe-install.sh
+
+# Frappe / ERPNext branches (default: version-15 for both)
+FRAPPE_BRANCH=develop ERPNEXT_BRANCH=develop bash 02-wsl-frappe-install.sh
+
+# Node major version (default: 20). Frappe v15 supports 18+; do NOT downgrade
+# below 18.
+NODE_VERSION=22 bash 02-wsl-frappe-install.sh
+```
+
+`YARN_VERSION` defaults to `1.22.22` (yarn Classic). Do NOT set it to a 4.x
+version — Frappe v15's package.json and bench's frontend toolchain both
+expect Classic semantics. Yarn 4 (Berry) will break `bench build`.
 
 ## Validation
 
@@ -80,15 +126,18 @@ To re-run only the health checks without installing anything:
 
 ```bash
 bash 01-wsl-system-deps.sh --validate
+bash 02-wsl-frappe-install.sh --validate
 ```
 
-This runs 25 checks (packages, services, listening ports, `wkhtmltopdf`
-patched-Qt build, MariaDB charset, MariaDB hardening). Exits 0 on success,
-1 on any failure with a `[FAIL]` line per failed check.
+Script 01's validate runs 25 checks (packages, services, listening ports,
+`wkhtmltopdf` patched-Qt build, MariaDB charset, MariaDB hardening).
+Script 02's validate runs ~15 checks (nvm, node, yarn, pipx, uv, bench,
+bench dir, frappe app, erpnext app, branches, default site, site DB,
+ERPNext tables). Both exit 0 on success, 1 on any failure.
 
 ## Re-running Safely
 
-Both scripts are designed to be re-run.
+All three scripts are designed to be re-run.
 
 - `00-windows-setup-wsl.ps1` — every step probes Windows / WSL state and
   reports `[OK] already installed/enabled` for steps that are done.
@@ -97,6 +146,12 @@ Both scripts are designed to be re-run.
   differs; `mysql_secure_installation` is launched only if the database
   has not already been hardened; `wkhtmltopdf` install is skipped if a
   patched-Qt build is already on `PATH`.
+- `02-wsl-frappe-install.sh` — nvm install is skipped if `~/.nvm/` exists;
+  Node + yarn version checks compare against the requested version before
+  installing; `bench init` is skipped if `~/frappe-bench/Procfile` exists;
+  `bench get-app` and `install-app` are skipped if the app is already
+  cloned / installed; `bench new-site` is skipped if the site directory
+  exists. Re-running on a finished install is just a `--validate` pass.
 
 ## WSL-Specific Notes
 
@@ -124,6 +179,7 @@ Both scripts are designed to be re-run.
 ```text
 00-windows-setup-wsl.ps1     # run on Windows in admin PowerShell
 01-wsl-system-deps.sh        # run inside Ubuntu (regular user with sudo)
+02-wsl-frappe-install.sh     # run inside Ubuntu after 01 succeeds
 .gitattributes               # locks bash scripts to LF, ps1 to CRLF
 README.md
 LICENSE
@@ -131,12 +187,15 @@ LICENSE
 
 ## Roadmap
 
-- `02-wsl-frappe-install.sh` — install Node via nvm, yarn, `frappe-bench`
-  via pipx, run `bench init`, create a default site, install ERPNext.
-  Equivalent to the Mac repo's `01-install-bench-and-site.sh`.
-- App bundles (`minimal` / `common` / `extended`) and profile flags
-  (`v15-lts` / `v16-lts`) once `02` is in.
-- Test harness under `tests/` with mocked `git` and `bench`.
+- App bundles (`minimal` / `common` / `extended`) — install HRMS, Payments,
+  CRM, Helpdesk, Insights alongside ERPNext, matching the Mac repo's
+  `APP_BUNDLE` env var pattern.
+- Profile flags (`v15-lts` / `v16-lts`) for switching between Frappe major
+  versions, again matching the Mac repo.
+- Test harness under `tests/` with mocked `git` and `bench` for CI-runnable
+  validation of script logic without doing a real install.
+- Optional: a `99-wsl-uninstall.sh` to roll back everything 01 + 02 did,
+  for experimenters who want a clean slate without nuking the whole distro.
 
 ## Important Notes
 
